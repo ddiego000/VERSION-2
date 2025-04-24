@@ -1,4 +1,5 @@
 from path import Path
+import heapq
 
 def reachable_nodes(network, start_node):
     visited = set()
@@ -14,15 +15,13 @@ def reachable_nodes(network, start_node):
     return visited
 
 def FindShortestPath(network, origin, destination):
-    current_paths = []
-
+    queue = []
     initial_path = Path()
     initial_path.add_node(origin, 0)
-    current_paths.append(initial_path)
+    heapq.heappush(queue, (initial_path.total_estimated_cost(destination), initial_path))
 
-    while current_paths:
-        current_paths.sort(key=lambda p: p.total_estimated_cost(destination))
-        path = current_paths.pop(0)
+    while queue:
+        _, path = heapq.heappop(queue)
         last = path.last_node()
 
         if last == destination:
@@ -34,6 +33,6 @@ def FindShortestPath(network, origin, destination):
             new_path = path.copy()
             cost = network.get_distance(last, neighbor)
             new_path.add_node(neighbor, cost)
-            current_paths.append(new_path)
+            heapq.heappush(queue, (new_path.total_estimated_cost(destination), new_path))
 
     return None
