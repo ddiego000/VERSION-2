@@ -20,7 +20,6 @@ class Path:
             return float('inf')
         return self.real_cost + Distance(self.last_node(), goal)
 
-
     def copy(self):
         new_path = Path()
         new_path.nodes = self.nodes[:]
