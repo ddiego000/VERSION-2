@@ -35,6 +35,10 @@ class GraphApp:
         self.btn_load_airspace = tk.Button(self.frame, text="Load Airspace From File", command=self.load_airspace_from_file)
         self.btn_load_airspace.pack(pady=2)
 
+        # Botón para exportar a KML y abrir en Google Earth
+        self.btn_export_kml = tk.Button(self.frame, text="Export Airspace to KML (Google Earth)", command=self.export_airspace_to_kml)
+        self.btn_export_kml.pack(pady=2)
+
         self.btn_select_node = tk.Button(self.frame, text="Select Node", command=self.select_node)
         self.btn_select_node.pack(pady=2)
 
@@ -206,6 +210,79 @@ class GraphApp:
 
         self.draw_graph()
 
+    def export_airspace_to_kml(self):
+        import subprocess
+        import tempfile
+        import sys
+        import os
+        from tkinter import messagebox, filedialog
+
+        path_nav = filedialog.askopenfilename(
+            title="Select navigation points file (_nav.txt)",
+            filetypes=[("Nav files", "*_nav.txt")]
+        )
+        if not path_nav:
+            return  # cancelado
+
+        base_dir = os.path.dirname(path_nav)
+        base_name = os.path.basename(path_nav)
+        if not base_name.endswith("_nav.txt"):
+            messagebox.showerror("Error", "El archivo seleccionado no es un archivo '_nav.txt'")
+            return
+        prefix = base_name[:-8]
+
+        path_seg = os.path.join(base_dir, f"{prefix}_seg.txt")
+        path_aer = os.path.join(base_dir, f"{prefix}_aer.txt")
+
+        airspace = AirSpace()
+        try:
+            airspace.load_navpoints(path_nav)
+            airspace.load_segments(path_seg)
+            airspace.load_airports(path_aer)
+        except Exception as e:
+            messagebox.showerror("Error loading airspace", str(e))
+            return
+
+        # Crear contenido KML
+        kml = '<?xml version="1.0" encoding="UTF-8"?>\n'
+        kml += '<kml xmlns="http://www.opengis.net/kml/2.2">\n<Document>\n'
+        kml += f'<name>Airspace {prefix}</name>\n'
+
+        # Añadir puntos
+        for np in airspace.nav_points.values():
+            kml += f'<Placemark><name>{np.name}</name>'
+            kml += f'<Point><coordinates>{np.longitude},{np.latitude},0</coordinates></Point></Placemark>\n'
+
+        # Añadir segmentos (líneas)
+        for seg in airspace.nav_segments:
+            origin = airspace.nav_points.get(seg.origin_number)
+            dest = airspace.nav_points.get(seg.destination_number)
+            if origin and dest:
+                kml += '<Placemark><LineString><coordinates>'
+                kml += f'{origin.longitude},{origin.latitude},0 {dest.longitude},{dest.latitude},0'
+                kml += '</coordinates></LineString></Placemark>\n'
+
+        kml += '</Document>\n</kml>'
+
+        # Guardar KML en temp
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.kml')
+        tmp.write(kml.encode('utf-8'))
+        tmp.close()
+
+        # Intentar abrir Google Earth o app por defecto
+        try:
+            if sys.platform == "win32":
+                os.startfile(tmp.name)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", tmp.name])
+            else:
+                subprocess.run(["xdg-open", tmp.name])
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir Google Earth: {e}")
+            return
+
+        messagebox.showinfo("Success", f"KML exportado y abierto: {tmp.name}")
+
     def select_node(self):
         name = simpledialog.askstring("Select Node", "Enter node name:")
         if name:
@@ -230,78 +307,41 @@ class GraphApp:
         self.draw_graph()
 
     def save_graph(self):
-        path = filedialog.asksaveasfilename(defaultextension=".txt")
+        path = filedialog.asksaveasfilename(defaultextension=".txt",
+                                            filetypes=[("Text files", "*.txt")])
         if path:
-            with open(path, 'w') as file:
+            with open(path, "w") as f:
                 for node in self.graph.nodes:
-                    file.write(f"{node.name},{node.x},{node.y}\n")
-                for segment in self.graph.segments:
-                    file.write(f"{segment.name},{segment.origin.name},{segment.destination.name}\n")
-            messagebox.showinfo("Saved", "Graph saved successfully!")
+                    f.write(f"node {node.name} {node.x} {node.y}\n")
+                for seg in self.graph.segments:
+                    f.write(f"segment {seg.name} {seg.origin.name} {seg.destination.name}\n")
+            messagebox.showinfo("Save", f"Graph saved to {path}")
 
     def show_reachability(self):
-        name = simpledialog.askstring("Reachability", "Enter node name:")
+        name = simpledialog.askstring("Reachability", "Enter start node name:")
         node = next((n for n in self.graph.nodes if n.name == name), None)
-        if not node:
+        if node:
+            reachable = self.graph.GetReachableNodes(node)
+            names = ", ".join(n.name for n in reachable)
+            messagebox.showinfo("Reachability", f"Nodes reachable from {name}: {names}")
+        else:
             messagebox.showerror("Error", "Node not found")
-            return
-
-        # Filtrar los segmentos salientes desde el nodo seleccionado
-        reachable_segments = [
-            s for s in self.graph.segments if s.origin == node
-        ]
-
-        self.ax.clear()
-
-        # Dibujar solo los segmentos salientes
-        for segment in reachable_segments:
-            x1, y1 = segment.origin.x, segment.origin.y
-            x2, y2 = segment.destination.x, segment.destination.y
-            self.ax.plot([x1, x2], [y1, y2], color='blue', linewidth=2)
-
-            mid_x = (x1 + x2) / 2
-            mid_y = (y1 + y2) / 2
-            dx = x2 - x1
-            dy = y2 - y1
-            fraction = 0.15
-            start_x = mid_x - dx * fraction
-            start_y = mid_y - dy * fraction
-            end_x = mid_x + dx * fraction
-            end_y = mid_y + dy * fraction
-
-            self.ax.annotate('', xy=(end_x, end_y), xytext=(start_x, start_y),
-                             arrowprops=dict(arrowstyle='->', color='blue', linewidth=1.5))
-
-        # Dibujar todos los nodos
-        for n in self.graph.nodes:
-            color = 'green' if n == node else 'blue' if n in node.neighbors else 'red'
-            self.ax.scatter(n.x, n.y, color=color, s=100)
-            self.ax.text(n.x, n.y, n.name, fontsize=10, ha='right')
-
-        self.ax.set_title(f"Reachability from {node.name}")
-        self.ax.set_xlim(self.ax.get_xlim())  # mantener zoom
-        self.ax.set_ylim(self.ax.get_ylim())
-        self.canvas.draw()
 
     def shortest_path(self):
-        start_name = simpledialog.askstring("Shortest Path", "Enter origin node:")
-        end_name = simpledialog.askstring("Shortest Path", "Enter destination node:")
-        origin = next((n for n in self.graph.nodes if n.name == start_name), None)
-        dest = next((n for n in self.graph.nodes if n.name == end_name), None)
-        if origin and dest:
-            path = FindShortestPath(self.graph, origin, dest)
+        start_name = simpledialog.askstring("Shortest Path", "Enter start node name:")
+        end_name = simpledialog.askstring("Shortest Path", "Enter end node name:")
+        start_node = next((n for n in self.graph.nodes if n.name == start_name), None)
+        end_node = next((n for n in self.graph.nodes if n.name == end_name), None)
+        if start_node and end_node:
+            path = FindShortestPath(self.graph, start_node, end_node)
             if path:
-                self.draw_graph(path=path, only_path=True)  # 🔥 solo muestra el camino más corto
+                self.draw_graph(path=path, only_path=True)
             else:
-                messagebox.showinfo("Result", "No path found")
+                messagebox.showinfo("Shortest Path", "No path found")
         else:
-            messagebox.showerror("Error", "Invalid nodes")
-
+            messagebox.showerror("Error", "Start or end node not found")
 
 if __name__ == "__main__":
     root = tk.Tk()
     app = GraphApp(root)
     root.mainloop()
-
-
-
